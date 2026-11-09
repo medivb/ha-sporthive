@@ -1,60 +1,65 @@
-# Sporthive for Home Assistant
+# Salto KS – Home Assistant custom integration
 
-Imports MYLAPS Sporthive **practice (training)** results into Home Assistant:
+Polls the Salto KS cloud API (default every 10 seconds) and exposes:
 
-- **Last training** sensors: date, location, sport, laps, distance, best/average/median lap, active and total time, fastest and average speed. They cover the whole training (all its sessions). Best lap and fastest speed include `achieved_at`; the laps sensor carries every lap in its `lap_times` attribute.
-- **Overall records per sport**: *Overall best lap <sport>* and *Overall fastest speed <sport>* (e.g. `sensor.sporthive_<chip>_overall_best_lap_ice_skating`), added automatically for every sport, with `achieved_at`, location and track length.
-- **Profile picture**: an image entity with the picture of your MYLAPS account.
-- **Per location** sensors (added automatically for each rink or track): personal best lap, fastest speed, total distance and number of activities.
-- The full history as **long-term statistics**, for the *Statistics graph* card:
-  - per location (lap times are only comparable on the same track): `sporthive:<chip>_loc<location id>_best_lap`, `_average_lap`, `_median_lap`, `_fastest_speed`, `_laps`, `_distance`, `_active_time`;
-  - overall totals across locations: `sporthive:<chip>_laps`, `_distance`, `_active_time`.
-
-> Unofficial. It uses the private API behind sporthive.com (`practice-api.speedhive.com`), which can change without notice. Check the MYLAPS terms of use before relying on it.
+| Device | Contents |
+|---|---|
+| **Account** (main device, named after `/me` first/last name) | Profile image entity (`image_url`), one entity per other `/me` field |
+| **Site** (one per site, named after `customer_reference`, linked to the account device) | One `lock` entity per lock, an owner picture image entity (`owner.image_url`), one entity per other site field, one entity per lock field |
 
 ## Installation
 
-1. HACS → three dots → *Custom repositories* → add `https://github.com/medivb/ha-sporthive` as type *Integration*, then install **Sporthive**. Or copy `custom_components/sporthive` into your Home Assistant `config/custom_components/` folder.
+1. Copy `custom_components/saltoks` into `<config>/custom_components/` (or add this repository to HACS as a custom repository).
 2. Restart Home Assistant.
-3. *Settings → Devices & services → Add integration → Sporthive*.
-4. Enter your MYLAPS **email address** and **password**, and the link of any of your activities, e.g. `https://sporthive.com/practice/1234567890/activity`.
+3. *Settings → Devices & services → Add integration → Salto KS*.
+4. Enter username, password, client ID, an optional client secret, and the scope.
 
-## Languages and icon
+Polling interval: *Configure* on the integration (5–300 s, default 10 s).
 
-The setup and options screens are available in English and Dutch. The integration ships its own icon, with a dark-mode variant, in `custom_components/sporthive/brand/` (shown from Home Assistant 2026.3).
+## Authentication
 
-## Sign-in
+- `POST https://identity.eu.my-clay.com/connect/token` (form-encoded `grant_type=password`, `username`, `password`) with `Authorization: Basic <client_id>`; the client ID is sent exactly as entered. If a client secret is configured, `base64("<client_id>:<client_secret>")` is sent instead. No `scope` is sent unless one is configured.
+- The access token is reused until 60 s before expiry, then renewed with `grant_type=refresh_token` when the server issued a refresh token; otherwise a new password grant is performed. Because the integration polls every 10 s, the session is kept alive continuously.
+- If refreshing fails, the integration authenticates again with the stored username and password. A `401` from the API forces a token renewal and one retry.
+- If the identity server rejects the credentials (`invalid_grant`, `invalid_client`, …), Home Assistant starts a re-authentication flow.
+- Tokens are held in memory only; they are not written to disk.
 
-MYLAPS signs in through Azure AD B2C. Its tokens for sporthive.com last 1 hour (access) and 24 hours from sign-in (refresh), and renewing does not extend the 24 hours. The integration therefore:
+## Locks
 
-- renews the 1-hour token with the refresh token (the refresh token is kept across restarts);
-- signs in again with your email address and password about once a day, by repeating the steps of the MYLAPS sign-in page.
+| HA action | API call |
+|---|---|
+| Lock | `PATCH /v1.2/sites/{site_id}/locks/{id}/locking` `{"locked_state": "locked"}` |
+| Unlock | same endpoint, `{"locked_state": "office_mode"}` |
 
-Consequences:
+State: `locked_state == "locked"` → *locked*; any other value → *unlocked*; missing → *unknown*. The raw value is available as the `locked_state` attribute.
 
-- Your password is stored in Home Assistant's `.storage/core.config_entries`, unencrypted. Use a password unique to MYLAPS and protect your Home Assistant backups.
-- If MYLAPS changes its sign-in page, adds a captcha or MFA, or asks you to accept new terms, the automatic sign-in fails. The log then says so; sign in once on sporthive.com and reload the integration. A wrong password opens a *Re-authenticate* prompt.
+## Metadata entities (auto-discovered)
 
-## How the history is found
+Every field returned by `/me`, `/sites` and `/sites/{id}/locks` becomes an entity (diagnostic category):
 
-The integration reads your account's activity list (all activities on the first run, the newest 10 afterwards) and fetches each new activity with all its sessions and laps: up to 10 activities every 2 minutes until the history is complete, then a check every 3 hours. The *Activities imported* sensor shows progress (`pending_backfill`) and the number of activities on your account (`activities_on_account`).
+- picture URL fields (`image_url`, `picture_url`, `avatar_url`, `photo_url`, `profile_image_url`, at any nesting level) → `image`, named after the parent object (for example "Owner picture"); no sensor is created for them
+- booleans → `binary_sensor`
+- strings / numbers → `sensor` (ISO date-time fields named `*_at`, `*date*`, `*time*` … get the timestamp device class)
+- lists → `sensor` with the item count as state; full list in the `items` attribute
+- nested objects are flattened up to 3 levels (`address.city` → "Address city")
+- strings longer than 255 characters are truncated in the state; the full value is in the `value` attribute
 
-Each activity becomes one hourly statistic row in the hour it started. Distance is laps × track length.
+Identifier fields (`id`, `*_id`, `*Id`, `uuid`, for example `owner.id`) are **hidden by default**. To show one, open the entity and enable *Visible* under its settings. Entities created by earlier versions are hidden once during the upgrade; a later choice to show them is kept.
 
-## Ignoring activities
+New fields, sites or locks that the API returns later are added automatically at the next poll; no update of the integration is needed. Entities for fields that disappear become *unavailable*. Device names follow changes to `customer_reference`.
 
-*Settings → Devices & services → Sporthive → Configure* lists all activities. Tick the ones to ignore (for example a test session); they are left out of the sensors and statistics, and the statistics are rebuilt.
+Diagnostics (*Download diagnostics*) contain all raw API data, with credentials and personal data redacted.
 
-## Privacy
+## Assumptions to verify
 
-Only the chip code, your MYLAPS account ID (needed to list your activities) and the training figures are stored. Chip labels and other personal fields from the API are not stored or shown. The local history is kept in `.storage/sporthive.<entry_id>` and deleted when the integration is removed.
+- **Scope**: none by default. If no refresh token is returned, add `offline_access` (if the client allows it); without it the integration simply re-authenticates with the password grant when the access token expires.
+- **Response shapes**: plain JSON arrays and `{"items": [...]}` envelopes are both supported; next-page links (`next_page_link`, `@odata.nextLink`, `next`) are followed when present.
+- **Rate limits**: each poll makes 2 + (number of sites) requests (lock lists are fetched in parallel, up to 5 at a time). Increase the interval if Salto KS throttles the account.
 
-## Development
+## Tests
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements_test.txt
-pytest -q
+pip install pytest-homeassistant-custom-component
+pytest
 ```
 
-Every push runs the tests, Home Assistant's `hassfest` check and the HACS validation (see `.github/workflows/validate.yml`).
