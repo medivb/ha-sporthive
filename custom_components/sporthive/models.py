@@ -357,7 +357,7 @@ def sport_slug(sport: str) -> str:
 
 
 def chip_slug(chip_code: str) -> str:
-    """Turn 'KX-87154' into 'kx_87154' for use in a statistic ID."""
+    """Turn 'KX-12345' into 'kx_12345' for use in a statistic ID."""
     return re.sub(r"[^a-z0-9]+", "_", chip_code.lower()).strip("_") or "chip"
 
 
