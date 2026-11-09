@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Sporthive",
+        "description": "Sign in with your MYLAPS (Sporthive) account and paste the link of one of your practice activities, for example https://sporthive.com/practice/1234567890/activity. The integration discovers your other activities from there and imports your history.",
+        "data": {
+          "username": "Email address",
+          "password": "Password",
+          "activity": "Activity link or ID"
+        },
+        "data_description": {
+          "password": "Stored in Home Assistant to sign in again once a day. Use a password you do not use anywhere else."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in to Sporthive again",
+        "description": "Signing in to MYLAPS failed. Check your email address and password.",
+        "data": {
+          "username": "Email address",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_activity": "No activity ID found in this link.",
+      "not_found": "This activity was not found or is not visible to your account.",
+      "invalid_auth": "MYLAPS rejected the email address or password.",
+      "login_flow": "The MYLAPS sign-in page behaved unexpectedly. Sign in once on sporthive.com (to accept any new terms) and try again. See the log for details.",
+      "cannot_connect": "Could not reach MYLAPS or the Sporthive API.",
+      "no_chip": "The activity has no transponder (chip) code.",
+      "unknown": "Unexpected error. See the Home Assistant log (search for 'sporthive') for details.",
+      "token_rejected": "Signing in to MYLAPS worked, but the Sporthive practice API rejected the token. See the log for details."
+    },
+    "abort": {
+      "already_configured": "This transponder is already set up.",
+      "reauth_successful": "Signed in again.",
+      "wrong_account": "This account belongs to a different transponder."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sporthive activities",
+        "description": "Tick the activities that should be ignored. They are left out of the sensors and the long-term statistics; the statistics are rebuilt after saving.",
+        "data": {
+          "excluded_activities": "Ignored activities"
+        }
+      }
+    }
+  }
+}

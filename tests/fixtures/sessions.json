@@ -1,0 +1,33 @@
+{
+  "bestLap": {"sessionId": 1, "lapNr": 2, "duration": "40.762", "speed": {"kph": 35.327020263971349, "mps": 9.81}},
+  "stats": {
+    "lapCount": 26,
+    "fastestTime": "40.762",
+    "averageTime": "1:40.333",
+    "medianTime": "1:12.123",
+    "totalTrainingTime": "48:32.564",
+    "activeTrainingTime": "43:28.669",
+    "averageSpeed": {"kph": 14.352146631098082, "mps": 3.98},
+    "fastestSpeed": {"kph": 35.327020263971349, "mps": 9.81},
+    "chip": {"code": "KX-00000", "codeNr": 1, "carId": 0, "id": 10}
+  },
+  "sessions": [
+    {
+      "id": 1,
+      "dateTimeStart": "2026-11-07T17:04:30.388+01:00",
+      "laps": [
+        {"nr": 1, "dateTimeStart": "2026-11-07T17:04:30.388+01:00", "duration": "55.011", "speed": {"kph": 26.176582865245134}, "status": "NONE"},
+        {"nr": 2, "dateTimeStart": "2026-11-07T17:05:25.399+01:00", "duration": "40.762", "speed": {"kph": 35.327020263971349}, "status": "REPORTBEST"}
+      ]
+    },
+    {
+      "id": 2,
+      "dateTimeStart": "2026-11-07T17:27:56.102+01:00",
+      "laps": [
+        {"nr": 1, "dateTimeStart": "2026-11-07T17:27:56.102+01:00", "duration": "2:01.323", "speed": {"kph": 11.869142701713608}, "status": "SESSIONBEST"},
+        {"nr": 2, "dateTimeStart": "2026-11-07T17:28:38.47+01:00", "duration": "42.368", "speed": {"kph": 33.987915407854992}, "status": "FASTER"}
+      ]
+    }
+  ],
+  "sections": [{"name": "Lap", "length": 400, "speedTrap": false}]
+}

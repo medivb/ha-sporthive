@@ -1,0 +1,13 @@
+{
+  "domain": "sporthive",
+  "name": "Sporthive",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/your-account/ha-sporthive",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/your-account/ha-sporthive/issues",
+  "requirements": [],
+  "version": "0.4.3"
+}

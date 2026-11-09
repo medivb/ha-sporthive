@@ -1,0 +1,44 @@
+{
+  "id": 8582809434,
+  "name": "Practice",
+  "startTime": "2026-11-07T17:04:30+01:00",
+  "endTime": "2026-11-07T17:53:02+01:00",
+  "location": {
+    "name": "IJsbaan Haarlem Scoreboard",
+    "id": 2822,
+    "trackLength": 400,
+    "sport": "IceSkating",
+    "country": "nl",
+    "sections": [
+      {
+        "name": "Lap",
+        "length": 400,
+        "speedTrap": false
+      }
+    ]
+  },
+  "accountId": 0,
+  "chipLabel": "Test",
+  "chipCode": "KX-00000",
+  "practiceSessionsDto": {
+    "locations": [
+      {
+        "id": 8582809434,
+        "locationId": 2822,
+        "starttimeutc": 1794067470000000
+      },
+      {
+        "id": 8557340454,
+        "locationId": 2822,
+        "starttimeutc": 1793641969000000
+      },
+      {
+        "id": 8524880271,
+        "locationId": 2822,
+        "starttimeutc": 1793037341000000
+      }
+    ]
+  },
+  "userId": "MYLAPS-GA-test",
+  "gaUId": "MYLAPS-GA-test"
+}
