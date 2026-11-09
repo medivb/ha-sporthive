@@ -1,13 +1,13 @@
 {
-  "domain": "saltoks",
-  "name": "Salto KS",
+  "domain": "sporthive",
+  "name": "Sporthive",
   "codeowners": ["@medivb"],
   "config_flow": true,
-  "dependencies": [],
-  "documentation": "https://github.com/medivb/ha-saltoks",
-  "integration_type": "hub",
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/medivb/ha-sporthive",
+  "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/medivb/ha-saltoks/issues",
+  "issue_tracker": "https://github.com/medivb/ha-sporthive/issues",
   "requirements": [],
-  "version": "0.1.4"
+  "version": "0.5.1"
 }
