@@ -1,147 +1,338 @@
-"""End-to-end tests with mocked Salto KS / Clay endpoints."""
+"""Config flow, sign-in, setup, back-fill and statistics tests."""
 
 from __future__ import annotations
 
-from datetime import timedelta
+import copy
+from datetime import UTC, datetime, timedelta
 import json
+from pathlib import Path
 
-import pytest
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.components.recorder.common import (
+    async_wait_recording_done,
 )
 
-from custom_components.saltoks.const import API_BASE_URL, DOMAIN, TOKEN_URL
+from homeassistant import config_entries
+from homeassistant.components.recorder.statistics import (
+    list_statistic_ids,
+    statistics_during_period,
+)
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 
-ENTRY_DATA = {
-    "username": "user@example.com",
-    "password": "pw",
-    "client_id": "my-client",
-    "client_secret": "",
-    "scope": "",
+from custom_components.sporthive.auth import AUTHORIZE_URL, TOKEN_URL
+from custom_components.sporthive.const import (
+    USERS_API_BASE,
+    API_BASE,
+    B2C_BASE,
+    CONF_ACCOUNT_ID,
+    CONF_CHIP,
+    CONF_EXCLUDED,
+    CONF_REFRESH_EXPIRES,
+    CONF_REFRESH_TOKEN,
+    CONF_SEED_ACTIVITY,
+    DOMAIN,
+)
+
+FIXTURES = Path(__file__).parent / "fixtures"
+ACTIVITY = json.loads((FIXTURES / "activity.json").read_text())
+SESSIONS = json.loads((FIXTURES / "sessions.json").read_text())
+TENANT_PATH = "/mylapsb2cprd.onmicrosoft.com/B2C_1A_signup_signin"
+SETTINGS = {
+    "api": "CombinedSigninAndSignup",
+    "csrf": "csrf-1",
+    "transId": "StateProperties=abc",
+    "hosts": {"tenant": TENANT_PATH, "policy": "B2C_1A_signup_signin"},
+}
+SIGNIN_PAGE = f"<html><script>var SETTINGS = {json.dumps(SETTINGS)};</script></html>"
+TOKENS = {
+    "id_token": "id-token-1",
+    "token_type": "Bearer",
+    "id_token_expires_in": 3600,
+    "scope": "openid",
+    "refresh_token": "refresh-1",
+    "refresh_token_expires_in": 86400,
+}
+OLDER = {
+    8557340454: "2026-11-01T18:00:00+01:00",
+    8524880271: "2026-10-25T18:00:00+01:00",
+}
+INLINE_ID = 8524880271
+USER_INPUT = {
+    CONF_USERNAME: "skater@example.com",
+    CONF_PASSWORD: "secret",
+    "activity": "https://sporthive.com/practice/8582809434/activity",
 }
 
-ME = {"id": "u1", "first_name": "Test", "last_name": "User", "email": "t@example.com",
-      "image_url": "https://img.example.com/u1.png", "language": "en"}
-SITES = {"items": [{"id": "s1", "customer_reference": "HQ Amsterdam", "name": "hq",
-                    "timezone": "Europe/Amsterdam", "is_active": True,
-                    "owner": {"first_name": "Owner", "image_url": "https://img.example.com/o.png"}}]}
-LOCKS = [{"id": "l1", "customer_reference": "Front door", "locked_state": "locked",
-          "battery_level": "normal", "online": True,
-          "last_seen_at": "2026-11-09T10:00:00Z", "tags": ["a", "b"]}]
+
+def _mock_login(aioclient_mock, *, signin_status: str = "200", page: str = SIGNIN_PAGE) -> None:
+    aioclient_mock.get(
+        AUTHORIZE_URL,
+        text=page,
+        headers=[
+            ("Set-Cookie", "x-ms-cpim-csrf=csrf-1; domain=mylapsb2cprd.b2clogin.com; path=/; secure"),
+            ("Set-Cookie", "x-ms-cpim-cache:abc_0=cache-1; path=/; secure; HttpOnly"),
+            ("Set-Cookie", "x-ms-cpim-trans=trans-1; path=/; secure; HttpOnly"),
+        ],
+    )
+    body = {"status": signin_status}
+    if signin_status != "200":
+        body["message"] = "Your password is incorrect"
+    aioclient_mock.post(f"{B2C_BASE}{TENANT_PATH}/SelfAsserted", text=json.dumps(body))
+    aioclient_mock.get(
+        f"{B2C_BASE}{TENANT_PATH}/api/CombinedSigninAndSignup/confirmed",
+        status=302,
+        headers={"Location": "https://sporthive.com/auth?state=x&code=auth-code-1"},
+    )
+    aioclient_mock.post(TOKEN_URL, json=TOKENS)
 
 
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations):
-    yield
+def _mock_api(aioclient_mock, *, account_status: int = 200) -> None:
+    listing = {
+        "activities": [
+            {"id": 8582809434, "startTime": ACTIVITY["startTime"]},
+            *({"id": i, "startTime": start} for i, start in OLDER.items()),
+        ],
+        "activityCount": 3,
+    }
+    aioclient_mock.get(
+        f"{API_BASE}/accounts/MYLAPS-GA-test/training/activities",
+        json=listing,
+        status=account_status,
+    )
+    aioclient_mock.get(f"{API_BASE}/training/activities/8582809434", json=ACTIVITY)
+    aioclient_mock.get(f"{API_BASE}/training/activities/8582809434/sessions", json=SESSIONS)
+    for activity_id, start in OLDER.items():
+        activity = copy.deepcopy(ACTIVITY)
+        activity.update(id=activity_id, startTime=start)
+        activity["practiceSessionsDto"]["locations"] = []
+        sessions = copy.deepcopy(SESSIONS)
+        sessions["stats"]["lapCount"] = 20
+        if activity_id == INLINE_ID:
+            # Inline track timing half laps: much shorter "laps".
+            activity["location"].update(
+                id=99, name="Inline track", sport="InlineSkating", trackLength=200
+            )
+            sessions["stats"]["fastestTime"] = "20.500"
+            sessions["stats"]["fastestSpeed"] = {"kph": 38.1}
+            sessions["sessions"][0]["laps"][0]["duration"] = "20.500"
+            sessions["sessions"][0]["laps"][0]["speed"] = {"kph": 38.1}
+        aioclient_mock.get(f"{API_BASE}/training/activities/{activity_id}", json=activity)
+        aioclient_mock.get(f"{API_BASE}/training/activities/{activity_id}/sessions", json=sessions)
 
 
-def _token(aioclient_mock, status=200, access="tok1"):
-    body = ({"access_token": access, "refresh_token": "r1", "expires_in": 3600}
-            if status == 200 else {"error": "invalid_grant"})
-    aioclient_mock.post(TOKEN_URL, status=status, json=body)
+def _calls(aioclient_mock, method: str, fragment: str) -> list:
+    return [c for c in aioclient_mock.mock_calls if c[0].lower() == method and fragment in str(c[1])]
 
 
-def _api(aioclient_mock, locks=None, me=None):
-    aioclient_mock.get(f"{API_BASE_URL}/me", json=me or ME)
-    aioclient_mock.get(f"{API_BASE_URL}/sites", json=SITES)
-    aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks", json=locks or LOCKS)
+async def _start_flow(hass: HomeAssistant):
+    return await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
 
 
-async def _setup(hass: HomeAssistant) -> MockConfigEntry:
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1")
+async def test_config_flow_signs_in(hass: HomeAssistant, aioclient_mock) -> None:
+    _mock_login(aioclient_mock)
+    _mock_api(aioclient_mock)
+    result = await _start_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**USER_INPUT, "activity": "nonsense"}
+    )
+    assert result["errors"] == {"activity": "invalid_activity"}
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Sporthive KX-00000"
+    data = result["data"]
+    assert data[CONF_USERNAME] == "skater@example.com"
+    assert data[CONF_CHIP] == "KX-00000"
+    assert data[CONF_SEED_ACTIVITY] == 8582809434
+    assert data[CONF_ACCOUNT_ID] == "MYLAPS-GA-test"
+    assert data[CONF_REFRESH_TOKEN] == "refresh-1"
+    assert data[CONF_REFRESH_EXPIRES]
+
+    # Credentials posted the way the B2C page does it.
+    signin = _calls(aioclient_mock, "post", "SelfAsserted")[0]
+    assert signin[2] == {
+        "request_type": "RESPONSE",
+        "signInName": "skater@example.com",
+        "password": "secret",
+    }
+    assert signin[3]["X-CSRF-TOKEN"] == "csrf-1"
+    assert "tx=StateProperties" in str(signin[1])
+    # Cookies with a colon in the name (dropped by aiohttp's jar) are sent too.
+    assert signin[3]["Cookie"] == (
+        "x-ms-cpim-csrf=csrf-1; x-ms-cpim-cache:abc_0=cache-1; x-ms-cpim-trans=trans-1"
+    )
+    confirm = _calls(aioclient_mock, "get", "confirmed")[0]
+    assert "x-ms-cpim-cache:abc_0=cache-1" in confirm[3]["Cookie"]
+
+    # Code exchanged with PKCE and the SPA origin.
+    token_call = _calls(aioclient_mock, "post", "oauth2/v2.0/token")[0]
+    assert token_call[2]["grant_type"] == "authorization_code"
+    assert token_call[2]["code"] == "auth-code-1"
+    assert len(token_call[2]["code_verifier"]) >= 43
+    assert token_call[3]["Origin"] == "https://sporthive.com"
+
+    api_call = _calls(aioclient_mock, "get", "practice-api")[-1]
+    assert api_call[3]["Authorization"] == "Bearer id-token-1"
+    # The practice API answers 401 without the sporthive.com Origin header.
+    assert api_call[3]["Origin"] == "https://sporthive.com"
+
+
+async def test_config_flow_wrong_password(hass: HomeAssistant, aioclient_mock) -> None:
+    _mock_login(aioclient_mock, signin_status="400")
+    _mock_api(aioclient_mock)
+    result = await _start_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert not _calls(aioclient_mock, "post", "oauth2/v2.0/token")
+
+
+async def test_config_flow_changed_login_page(hass: HomeAssistant, aioclient_mock) -> None:
+    _mock_login(aioclient_mock, page="<html>new design</html>")
+    result = await _start_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    assert result["errors"] == {"base": "login_flow"}
+
+
+def _entry(**extra) -> MockConfigEntry:
+    return MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="KX-00000",
+        data={
+            CONF_USERNAME: "skater@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_CHIP: "KX-00000",
+            CONF_SEED_ACTIVITY: 8582809434,
+            **extra,
+        },
+    )
+
+
+async def test_setup_uses_stored_refresh_token(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    _mock_login(aioclient_mock)
+    _mock_api(aioclient_mock)
+    expires = datetime.now(UTC) + timedelta(hours=10)
+    entry = _entry(**{CONF_REFRESH_TOKEN: "stored", CONF_REFRESH_EXPIRES: expires.isoformat()})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    return entry
+
+    assert not _calls(aioclient_mock, "get", "authorize")  # no full sign-in
+    token_calls = _calls(aioclient_mock, "post", "oauth2/v2.0/token")
+    assert len(token_calls) == 1
+    assert token_calls[0][2]["grant_type"] == "refresh_token"
+    assert token_calls[0][2]["refresh_token"] == "stored"
+    # SPA refresh tokens keep their original expiry.
+    assert entry.data[CONF_REFRESH_TOKEN] == "refresh-1"
+    assert datetime.fromisoformat(entry.data[CONF_REFRESH_EXPIRES]) == expires
 
 
-async def test_setup_devices_and_entities(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
-    _api(aioclient_mock)
-    entry = await _setup(hass)
+async def test_setup_backfill_and_statistics(
+    recorder_mock, hass: HomeAssistant, aioclient_mock
+) -> None:
+    _mock_login(aioclient_mock)
+    _mock_api(aioclient_mock)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    er.async_get(hass).async_get_or_create(
+        "sensor", DOMAIN, "kx-00000_overall_best_lap", config_entry=entry
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
 
-    # Token request: password grant with Basic client auth.
-    method, url, data, headers = aioclient_mock.mock_calls[0]
-    assert str(url) == TOKEN_URL
-    assert data["grant_type"] == "password"
-    assert headers["Authorization"].startswith("Basic ")
+    best = hass.states.get("sensor.sporthive_kx_00000_last_training_best_lap")
+    assert best.attributes["achieved_at"] == "2026-11-07T17:05:25.399+01:00"
+    # Records per sport: inline half laps do not beat the ice record.
+    record = hass.states.get("sensor.sporthive_kx_00000_overall_best_lap_ice_skating")
+    assert record.state == "40.762"
+    assert record.attributes["location"] == "IJsbaan Haarlem Scoreboard"
+    assert record.attributes["sport"] == "Ice skating"
+    assert record.attributes["track_length_m"] == 400
+    assert record.attributes["achieved_at"].startswith("2026-")
+    assert record.attributes["icon"] == "mdi:skate"
+    inline = hass.states.get("sensor.sporthive_kx_00000_overall_best_lap_inline_skating")
+    assert inline.state == "20.5"
+    assert inline.attributes["location"] == "Inline track"
+    assert inline.attributes["track_length_m"] == 200
+    speed = hass.states.get("sensor.sporthive_kx_00000_overall_fastest_speed_ice_skating")
+    assert speed.state == "35.327"
+    assert "achieved_at" in speed.attributes
+    assert hass.states.get("sensor.sporthive_kx_00000_overall_fastest_speed_inline_skating").state == "38.1"
+    # The combined v0.4 record sensors are removed.
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("sensor", DOMAIN, "kx-00000_overall_best_lap") is None
+    assert len(_calls(aioclient_mock, "get", "authorize")) == 1  # one sign-in only
 
-    devreg = dr.async_get(hass)
-    account = devreg.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
-    site = devreg.async_get_device(identifiers={(DOMAIN, "site_s1")})
-    assert account.name == "Test User"
-    assert site.name == "HQ Amsterdam"
-    assert site.via_device_id == account.id
+    assert hass.states.get("sensor.sporthive_kx_00000_last_training_best_lap").state == "40.762"
+    assert hass.states.get("sensor.sporthive_kx_00000_last_training_distance").state == "10.4"
+    assert hass.states.get("sensor.sporthive_kx_00000_last_training_location").state == "IJsbaan Haarlem Scoreboard"
+    assert hass.states.get("sensor.sporthive_kx_00000_activities_imported").state == "3"
+    laps = hass.states.get("sensor.sporthive_kx_00000_last_training_laps")
+    assert laps.state == "26"
+    assert len(laps.attributes["lap_times"]) == 4
+    assert entry.runtime_data.update_interval == timedelta(hours=3)
 
-    entreg = er.async_get(hass)
-    lock_id = entreg.async_get_entity_id("lock", DOMAIN, f"{entry.entry_id}_lock_s1_l1")
-    assert hass.states.get(lock_id).state == "locked"
-    assert entreg.async_get(lock_id).device_id == site.id
+    await async_wait_recording_done(hass)
+    ids = await recorder_mock.async_add_executor_job(list_statistic_ids, hass)
+    stat_ids = {s["statistic_id"] for s in ids}
+    # Lap times per location; laps, distance and time also as overall totals.
+    assert {
+        "sporthive:kx_00000_loc2822_best_lap",
+        "sporthive:kx_00000_loc2822_distance",
+        "sporthive:kx_00000_distance",
+        "sporthive:kx_00000_laps",
+    } <= stat_ids
+    assert "sporthive:kx_00000_best_lap" not in stat_ids
 
-    image_id = entreg.async_get_entity_id("image", DOMAIN, f"{entry.entry_id}_profile_image")
-    assert entreg.async_get(image_id).device_id == account.id
-    assert hass.states.get(image_id).state != "unavailable"
+    sport = hass.states.get("sensor.sporthive_kx_00000_last_training_sport")
+    assert sport.state == "Ice skating"
+    assert sport.attributes["icon"] == "mdi:skate"
+    assert sport.attributes["sport_code"] == "IceSkating"
+    best = hass.states.get("sensor.sporthive_kx_00000_last_training_best_lap")
+    assert best.attributes["location"] == "IJsbaan Haarlem Scoreboard"
+    assert best.attributes["sport"] == "Ice skating"
+    location = hass.states.get("sensor.sporthive_kx_00000_last_training_location")
+    assert location.attributes["country"] == "nl"
+    assert location.attributes["track_length_m"] == 400
 
-    # Metadata entities.
-    def uid(x):
-        return f"{entry.entry_id}_{x}"
-    lang = entreg.async_get_entity_id("sensor", DOMAIN, uid("me__language"))
-    assert hass.states.get(lang).state == "en"
-    tz = entreg.async_get_entity_id("sensor", DOMAIN, uid("site_s1__timezone"))
-    assert hass.states.get(tz).state == "Europe/Amsterdam"
-    active = entreg.async_get_entity_id("binary_sensor", DOMAIN, uid("site_s1__is_active"))
-    assert hass.states.get(active).state == "on"
-    seen = entreg.async_get_entity_id("sensor", DOMAIN, uid("lock_s1_l1__last_seen_at"))
-    assert hass.states.get(seen).attributes["device_class"] == "timestamp"
-    tags = entreg.async_get_entity_id("sensor", DOMAIN, uid("lock_s1_l1__tags"))
-    assert hass.states.get(tags).state == "2"
-    assert hass.states.get(tags).attributes["items"] == ["a", "b"]
-    online = entreg.async_get_entity_id("binary_sensor", DOMAIN, uid("lock_s1_l1__online"))
-    assert entreg.async_get(online).device_id == site.id
+    pb = hass.states.get("sensor.sporthive_kx_00000_ijsbaan_haarlem_scoreboard_personal_best_lap")
+    assert pb.state == "40.762"
+    assert pb.attributes["sport"] == "Ice skating"
+    assert hass.states.get("sensor.sporthive_kx_00000_ijsbaan_haarlem_scoreboard_activities").state == "2"
+    assert hass.states.get("sensor.sporthive_kx_00000_inline_track_activities").state == "1"
+    # Account list used: the account ID was derived from the seed activity.
+    assert entry.data[CONF_ACCOUNT_ID] == "MYLAPS-GA-test"
+    assert _calls(aioclient_mock, "get", "/accounts/MYLAPS-GA-test/training/activities")
 
-
-async def test_lock_unlock_and_new_metadata(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
-    _api(aioclient_mock)
-    entry = await _setup(hass)
-    lock_id = er.async_get(hass).async_get_entity_id(
-        "lock", DOMAIN, f"{entry.entry_id}_lock_s1_l1")
-
-    patch_url = f"{API_BASE_URL}/sites/s1/locks/l1/locking"
-    aioclient_mock.patch(patch_url, json={})
-    # After unlocking, the API reports office_mode and a brand-new field.
-    unlocked = [{**LOCKS[0], "locked_state": "office_mode", "firmware": "1.2.3"}]
-    aioclient_mock.clear_requests()
-    _token(aioclient_mock)
-    _api(aioclient_mock, locks=unlocked)
-    aioclient_mock.patch(patch_url, json={})
-
-    await hass.services.async_call("lock", "unlock", {"entity_id": lock_id}, blocking=True)
-    patch_calls = [c for c in aioclient_mock.mock_calls if c[0] == "PATCH"]
-    assert patch_calls[-1][2] == {"locked_state": "office_mode"}
-
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
-    await hass.async_block_till_done()
-    assert hass.states.get(lock_id).state == "unlocked"
-
-    fw = er.async_get(hass).async_get_entity_id(
-        "sensor", DOMAIN, f"{entry.entry_id}_lock_s1_l1__firmware")
-    assert fw is not None and hass.states.get(fw).state == "1.2.3"
-
-    await hass.services.async_call("lock", "lock", {"entity_id": lock_id}, blocking=True)
-    patch_calls = [c for c in aioclient_mock.mock_calls if c[0] == "PATCH"]
-    assert patch_calls[-1][2] == {"locked_state": "locked"}
+    stats = await recorder_mock.async_add_executor_job(
+        statistics_during_period,
+        hass,
+        dt_util.utcnow() - timedelta(days=3650),
+        None,
+        {"sporthive:kx_00000_laps"},
+        "hour",
+        None,
+        {"state", "sum"},
+    )
+    rows = stats["sporthive:kx_00000_laps"]
+    assert [r["state"] for r in rows] == [20, 20, 26]
+    assert [r["sum"] for r in rows] == [20, 40, 66]
 
 
-async def test_invalid_credentials_start_reauth(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock, status=400)
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1")
+async def test_wrong_password_starts_reauth(hass: HomeAssistant, aioclient_mock) -> None:
+    _mock_login(aioclient_mock, signin_status="400")
+    entry = _entry()
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -150,188 +341,121 @@ async def test_invalid_credentials_start_reauth(hass: HomeAssistant, aioclient_m
     assert any(f["context"]["source"] == "reauth" for f in flows)
 
 
-async def test_client_token_lifecycle(hass: HomeAssistant, aioclient_mock) -> None:
-    """Refresh grant on expiry, password grant when refresh is rejected, retry on 401."""
-    from homeassistant.helpers.aiohttp_client import async_get_clientsession
-    from custom_components.saltoks.api import SaltoKSClient
-
-    client = SaltoKSClient(async_get_clientsession(hass), "u", "p", "c")
-    _token(aioclient_mock)
-    await client.async_get_access_token()
-    assert aioclient_mock.mock_calls[-1][2]["grant_type"] == "password"
-
-    client._expires_at = 0  # simulate expiry
-    await client.async_get_access_token()
-    assert aioclient_mock.mock_calls[-1][2]["grant_type"] == "refresh_token"
-
-    # Refresh rejected -> password grant.
-    aioclient_mock.clear_requests()
-    calls = []
-
-    async def token_handler(method, url, data):
-        calls.append(data["grant_type"])
-        from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMockResponse
-        if data["grant_type"] == "refresh_token":
-            return AiohttpClientMockResponse(method, url, status=400,
-                                             text=json.dumps({"error": "invalid_grant"}))
-        return AiohttpClientMockResponse(method, url, status=200, text=json.dumps(
-            {"access_token": "tok2", "refresh_token": "r2", "expires_in": 3600}))
-
-    aioclient_mock.post(TOKEN_URL, side_effect=token_handler)
-    client._expires_at = 0
-    assert await client.async_get_access_token() == "tok2"
-    assert calls == ["refresh_token", "password"]
-
-
-def test_basic_auth_formats() -> None:
-    import base64
-    from custom_components.saltoks.api import SaltoKSClient
-
-    # No secret: client ID sent as-is, matching the manual curl request.
-    assert SaltoKSClient(None, "u", "p", "abc123==")._basic_auth == "Basic abc123=="
-    assert SaltoKSClient(None, "u", "p", " Basic abc123== ")._basic_auth == "Basic abc123=="
-    with_secret = base64.b64encode(b"id:sec").decode()
-    assert SaltoKSClient(None, "u", "p", "id", "sec")._basic_auth == f"Basic {with_secret}"
-
-
-async def test_token_request_matches_manual_call(hass: HomeAssistant, aioclient_mock) -> None:
-    from homeassistant.helpers.aiohttp_client import async_get_clientsession
-    from custom_components.saltoks.api import SaltoKSClient
-
-    _token(aioclient_mock)
-    client = SaltoKSClient(async_get_clientsession(hass), "a@b.c", "pw", "CLIENTID")
-    await client.async_authenticate()
-    _, url, data, headers = aioclient_mock.mock_calls[-1]
-    assert headers["Authorization"] == "Basic CLIENTID"
-    assert headers["Content-Type"] == "application/x-www-form-urlencoded"
-    assert data == {"grant_type": "password", "username": "a@b.c", "password": "pw"}
-
-
-async def test_config_flow_shows_server_error(hass: HomeAssistant, aioclient_mock) -> None:
-    aioclient_mock.post(TOKEN_URL, status=400,
-                        json={"error": "invalid_client", "error_description": "unknown client"})
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], ENTRY_DATA)
-    assert result["errors"] == {"base": "invalid_client"}
-    assert result["description_placeholders"]["server_message"] == "invalid_client: unknown client"
-
-
-async def test_picture_urls_are_images_not_sensors(hass: HomeAssistant, aioclient_mock) -> None:
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1")
+async def test_v01_token_entry_asks_for_credentials(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="KX-00000",
+        data={"token": "old", CONF_CHIP: "KX-00000", CONF_SEED_ACTIVITY: 8582809434},
+    )
     entry.add_to_hass(hass)
-    entreg = er.async_get(hass)
-    # Sensors created for picture URLs by an earlier version must be removed.
-    for uid in ("me__image_url", "site_s1__owner.image_url"):
-        entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_{uid}",
-                                   config_entry=entry)
-    _token(aioclient_mock)
-    _api(aioclient_mock)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    flows = hass.config_entries.flow.async_progress()
+    assert any(f["context"]["source"] == "reauth" for f in flows)
+
+
+async def test_config_flow_api_rejects_token(hass: HomeAssistant, aioclient_mock) -> None:
+    """Sign-in works but the practice API answers 401 (regression: no crash)."""
+    _mock_login(aioclient_mock)
+    aioclient_mock.get(f"{API_BASE}/training/activities/8582809434", status=401, text="")
+    result = await _start_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    assert result["errors"] == {"base": "token_rejected"}
+    # Retried once with a refreshed token before giving up.
+    assert len(_calls(aioclient_mock, "get", "practice-api")) == 2
+    grants = [c[2]["grant_type"] for c in _calls(aioclient_mock, "post", "oauth2/v2.0/token")]
+    assert grants == ["authorization_code", "refresh_token"]
+
+
+async def _laps_rows(hass, recorder_mock) -> list:
+    await async_wait_recording_done(hass)
+    stats = await recorder_mock.async_add_executor_job(
+        statistics_during_period,
+        hass,
+        dt_util.utcnow() - timedelta(days=3650),
+        None,
+        {"sporthive:kx_00000_laps"},
+        "hour",
+        None,
+        {"state", "sum"},
+    )
+    return stats.get("sporthive:kx_00000_laps", [])
+
+
+async def test_exclude_oldest_activity(recorder_mock, hass: HomeAssistant, aioclient_mock) -> None:
+    _mock_login(aioclient_mock)
+    _mock_api(aioclient_mock)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert [r["sum"] for r in await _laps_rows(hass, recorder_mock)] == [20, 40, 66]
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_EXCLUDED: ["8524880271"]}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert entry.options[CONF_EXCLUDED] == ["8524880271"]
+    activities = hass.states.get("sensor.sporthive_kx_00000_activities_imported")
+    assert activities.state == "2"
+    assert activities.attributes["excluded"] == 1
+    # The statistics were rebuilt without the oldest activity.
+    assert [r["sum"] for r in await _laps_rows(hass, recorder_mock)] == [20, 46]
+    # The excluded activity is not fetched again.
+    assert len(_calls(aioclient_mock, "get", "/training/activities/8524880271/sessions")) == 1
+
+
+async def test_refresh_token_update_does_not_reload(
+    recorder_mock, hass: HomeAssistant, aioclient_mock
+) -> None:
+    _mock_login(aioclient_mock)
+    _mock_api(aioclient_mock)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = entry.runtime_data
+    hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_REFRESH_TOKEN: "x"})
+    await hass.async_block_till_done()
+    assert entry.runtime_data is coordinator
+
+
+async def test_fallback_to_activity_links(recorder_mock, hass: HomeAssistant, aioclient_mock) -> None:
+    _mock_login(aioclient_mock)
+    _mock_api(aioclient_mock, account_status=404)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.sporthive_kx_00000_activities_imported").state == "3"
+
+
+async def test_profile_picture(
+    recorder_mock, hass: HomeAssistant, aioclient_mock, hass_client
+) -> None:
+    _mock_login(aioclient_mock)
+    _mock_api(aioclient_mock)
+    aioclient_mock.get(
+        f"{USERS_API_BASE}/api/v2/image/id/MYLAPS-GA-test",
+        content=b"\x89PNG fake",
+        headers={"Content-Type": "image/png"},
+    )
+    entry = _entry()
+    entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    for uid in ("me__image_url", "site_s1__owner.image_url"):
-        assert entreg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{uid}") is None
-    # Other owner fields stay sensors.
-    assert entreg.async_get_entity_id(
-        "sensor", DOMAIN, f"{entry.entry_id}_site_s1__owner.first_name") is not None
-
-    site = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, "site_s1")})
-    owner_img = entreg.async_get_entity_id(
-        "image", DOMAIN, f"{entry.entry_id}_site_s1__owner.image_url")
-    assert entreg.async_get(owner_img).device_id == site.id
-    state = hass.states.get(owner_img)
-    assert state.state != "unavailable"
-    assert state.attributes["friendly_name"] == "HQ Amsterdam Owner picture"
-
-    # The profile image on the account device is unchanged.
-    assert entreg.async_get_entity_id(
-        "image", DOMAIN, f"{entry.entry_id}_profile_image") is not None
-    assert entreg.async_get_entity_id(
-        "image", DOMAIN, f"{entry.entry_id}_me__image_url") is None
-
-    # A changed URL updates the picture timestamp.
-    before = state.state
-    new_sites = {"items": [{**SITES["items"][0],
-                            "owner": {"first_name": "Owner", "image_url": "https://img.example.com/o2.png"}}]}
-    aioclient_mock.clear_requests()
-    _token(aioclient_mock)
-    aioclient_mock.get(f"{API_BASE_URL}/me", json=ME)
-    aioclient_mock.get(f"{API_BASE_URL}/sites", json=new_sites)
-    aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks", json=LOCKS)
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
-    await hass.async_block_till_done(wait_background_tasks=True)
-    assert hass.states.get(owner_img).state != before
-
-
-async def test_id_entities_hidden_by_default(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
-    _api(aioclient_mock)
-    entry = await _setup(hass)
-    entreg = er.async_get(hass)
-
-    def reg(uid):
-        return entreg.async_get(entreg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{uid}"))
-
-    for uid in ("me__id", "site_s1__id", "lock_s1_l1__id"):
-        assert reg(uid).hidden_by is er.RegistryEntryHider.INTEGRATION
-    for uid in ("me__language", "site_s1__timezone", "site_s1__owner.first_name"):
-        assert reg(uid).hidden_by is None
-
-
-async def test_migration_hides_existing_id_entities(hass: HomeAssistant, aioclient_mock) -> None:
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
-                            version=1, minor_version=1)
-    entry.add_to_hass(hass)
-    entreg = er.async_get(hass)
-    old_id = entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_site_s1__id",
-                                        config_entry=entry)
-    old_tz = entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_site_s1__timezone",
-                                        config_entry=entry)
-    _token(aioclient_mock)
-    _api(aioclient_mock)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.minor_version == 2
-    assert entreg.async_get(old_id.entity_id).hidden_by is er.RegistryEntryHider.INTEGRATION
-    assert entreg.async_get(old_tz.entity_id).hidden_by is None
-
-
-def test_is_id_field() -> None:
-    from custom_components.saltoks.entity import is_id_field
-
-    for path in [("id",), ("owner", "id"), ("site_id",), ("customerId",), ("uuid",)]:
-        assert is_id_field(path), path
-    for path in [("idle",), ("valid",), ("android",), ("customer_reference",), ()]:
-        assert not is_id_field(path), path
-
-
-PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
-
-
-async def test_picture_served_as_octet_stream(hass: HomeAssistant, aioclient_mock) -> None:
-    """Azure Blob Storage serves pictures as application/octet-stream."""
-    import respx
-
-    _token(aioclient_mock)
-    _api(aioclient_mock)
-    entry = await _setup(hass)
-    owner_img = er.async_get(hass).async_get_entity_id(
-        "image", DOMAIN, f"{entry.entry_id}_site_s1__owner.image_url")
-    entity = hass.data["image"].get_entity(owner_img)
-
-    with respx.mock:
-        respx.get("https://img.example.com/o.png").respond(
-            200, content=PNG_BYTES, headers={"content-type": "application/octet-stream"})
-        assert await entity.async_image() == PNG_BYTES
-    assert entity.content_type == "image/png"
-
-
-def test_detect_image_type() -> None:
-    from custom_components.saltoks.image import detect_image_type
-
-    assert detect_image_type(PNG_BYTES, "application/octet-stream", "https://x/a") == "image/png"
-    assert detect_image_type(b"\xff\xd8\xff\xe0", None, "https://x/a") == "image/jpeg"
-    assert detect_image_type(b"", "image/webp", "https://x/a") == "image/webp"
-    assert detect_image_type(b"????", "application/octet-stream", "https://x/a.jpg") == "image/jpeg"
-    assert detect_image_type(b"????", "application/octet-stream", "https://x/a") is None
+    assert hass.states.get("image.sporthive_kx_00000_profile_picture")
+    client = await hass_client()
+    resp = await client.get("/api/image_proxy/image.sporthive_kx_00000_profile_picture")
+    assert resp.status == 200
+    assert await resp.read() == b"\x89PNG fake"
+    assert resp.headers["Content-Type"] == "image/png"
+    call = _calls(aioclient_mock, "get", "usersandproducts-api")[0]
+    assert call[3]["Authorization"] == "Bearer id-token-1"
+    assert call[3]["Origin"] == "https://sporthive.com"
