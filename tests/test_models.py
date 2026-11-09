@@ -48,11 +48,11 @@ def test_parse_duration(value, expected) -> None:
 
 
 def test_parse_activity_id_and_token() -> None:
-    assert parse_activity_id("https://sporthive.com/practice/8582809434/activity") == 8582809434
-    assert parse_activity_id(" 8582809434 ") == 8582809434
+    assert parse_activity_id("https://sporthive.com/practice/1234567890/activity") == 1234567890
+    assert parse_activity_id(" 1234567890 ") == 1234567890
     assert parse_activity_id("https://sporthive.com/") is None
     assert clean_token("  Bearer abc.def ") == "abc.def"
-    assert chip_slug("KX-87154") == "kx_87154"
+    assert chip_slug("KX-12345") == "kx_12345"
 
 
 def test_related_ids() -> None:
