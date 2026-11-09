@@ -5,7 +5,7 @@ Polls the Salto KS cloud API (default every 10 seconds) and exposes:
 | Device | Contents |
 |---|---|
 | **Account** (main device, named after `/me` first/last name) | Profile image entity (`image_url`), one entity per other `/me` field |
-| **Site** (one per site, named after `customer_reference`, linked to the account device) | One `lock` entity per lock, an owner picture image entity (`owner.image_url`), one entity per other site field, one entity per lock field |
+| **Site** (one per site, named after `customer_reference`, linked to the account device) | One `lock` entity per lock, an owner picture image entity (`owner.image_url`), one entity per other site field |
 
 ## Installation
 
@@ -18,8 +18,8 @@ Polling interval: *Configure* on the integration (5–300 s, default 10 s).
 
 ## Authentication
 
-- `POST https://identity.eu.my-clay.com/connect/token` (form-encoded `grant_type=password`, `username`, `password`) with `Authorization: Basic <client_id>`; the client ID is sent exactly as entered. If a client secret is configured, `base64("<client_id>:<client_secret>")` is sent instead. No `scope` is sent unless one is configured.
-- The access token is reused until 60 s before expiry, then renewed with `grant_type=refresh_token` when the server issued a refresh token; otherwise a new password grant is performed. Because the integration polls every 10 s, the session is kept alive continuously.
+- `POST https://identity.eu.my-clay.com/connect/token` (form-encoded `grant_type=password`, `username`, `password`) with `Authorization: Basic <client_id>`; the client ID is sent exactly as entered. If a client secret is supplied, standard HTTP Basic authentication with `client_id:client_secret` is used.
+- The access token is reused until 60 s before expiry, then renewed with `grant_type=refresh_token` when the server issued a refresh token; otherwise a new password grant is performed. Because the integration does not know the server's refresh-token expiry, it uses the refresh token until rejected.
 - If refreshing fails, the integration authenticates again with the stored username and password. A `401` from the API forces a token renewal and one retry.
 - If the identity server rejects the credentials (`invalid_grant`, `invalid_client`, …), Home Assistant starts a re-authentication flow.
 - Tokens are held in memory only; they are not written to disk.
@@ -37,16 +37,16 @@ State: `locked_state == "locked"` → *locked*; any other value → *unlocked*; 
 
 Every field returned by `/me`, `/sites` and `/sites/{id}/locks` becomes an entity (diagnostic category):
 
-- picture URL fields (`image_url`, `picture_url`, `avatar_url`, `photo_url`, `profile_image_url`, at any nesting level) → `image`, named after the parent object (for example "Owner picture"); no sensor is created for them
+- picture URL fields (`image_url`, `picture_url`, `avatar_url`, `photo_url`, `profile_image_url`, at any nesting level) → `image`, named after the parent object (for example "Owner picture"); no sensor is created for the URL
 - booleans → `binary_sensor`
 - strings / numbers → `sensor` (ISO date-time fields named `*_at`, `*date*`, `*time*` … get the timestamp device class)
 - lists → `sensor` with the item count as state; full list in the `items` attribute
 - nested objects are flattened up to 3 levels (`address.city` → "Address city")
 - strings longer than 255 characters are truncated in the state; the full value is in the `value` attribute
 
-Identifier fields (`id`, `*_id`, `*Id`, `uuid`, for example `owner.id`) are **hidden by default**. To show one, open the entity and enable *Visible* under its settings. Entities created by earlier versions are hidden once during the upgrade; a later choice to show them is kept.
+Identifier fields (`id`, `*_id`, `*Id`, `uuid`, for example `owner.id`) are **hidden by default**. To show one, open the entity and enable *Visible* under its settings. Entities created by earlier versions are also hidden during migration.
 
-New fields, sites or locks that the API returns later are added automatically at the next poll; no update of the integration is needed. Entities for fields that disappear become *unavailable*. Device names follow changes to `customer_reference`.
+New fields, sites or locks that the API returns later are added automatically at the next poll; no update of the integration is needed. Entities for fields that disappear become *unavailable*. Device names are updated from the API data.
 
 Diagnostics (*Download diagnostics*) contain all raw API data, with credentials and personal data redacted.
 
@@ -62,4 +62,3 @@ Diagnostics (*Download diagnostics*) contain all raw API data, with credentials 
 pip install pytest-homeassistant-custom-component
 pytest
 ```
-
