@@ -14,7 +14,7 @@ Imports MYLAPS Sporthive **practice (training)** results into Home Assistant:
 
 ## Installation
 
-1. HACS → three dots → *Custom repositories* → add this repository as type *Integration*, then install **Sporthive**. Or copy `custom_components/sporthive` into your Home Assistant `config/custom_components/` folder.
+1. HACS → three dots → *Custom repositories* → add `https://github.com/medivb/ha-sporthive` as type *Integration*, then install **Sporthive**. Or copy `custom_components/sporthive` into your Home Assistant `config/custom_components/` folder.
 2. Restart Home Assistant.
 3. *Settings → Devices & services → Add integration → Sporthive*.
 4. Enter your MYLAPS **email address** and **password**, and the link of any of your activities, e.g. `https://sporthive.com/practice/1234567890/activity`.
@@ -48,3 +48,13 @@ Each activity becomes one hourly statistic row in the hour it started. Distance 
 ## Privacy
 
 Only the chip code, your MYLAPS account ID (needed to list your activities) and the training figures are stored. Chip labels and other personal fields from the API are not stored or shown. The local history is kept in `.storage/sporthive.<entry_id>` and deleted when the integration is removed.
+
+## Development
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements_test.txt
+pytest -q
+```
+
+Every push runs the tests, Home Assistant's `hassfest` check and the HACS validation (see `.github/workflows/validate.yml`).
