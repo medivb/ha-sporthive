@@ -48,7 +48,7 @@ SETTINGS = {
     "transId": "StateProperties=abc",
     "hosts": {"tenant": TENANT_PATH, "policy": "B2C_1A_signup_signin"},
 }
-SIGNIN_PAGE = f"<html><script>var SETTINGS = {json.dumps(SETTINGS)};</script></html>"
+SIGNIN_PAGE = f"<html><script>var SETTINGS = {json.dumps(SETTINGS)}</script></html>"
 TOKENS = {
     "id_token": "id-token-1",
     "token_type": "Bearer",
