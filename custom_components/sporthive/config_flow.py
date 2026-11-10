@@ -38,6 +38,7 @@ from .api import (
 )
 from .auth import SporthiveLoginFlowError
 from .const import (
+    ACTIVITY_URL,
     CONF_ACCOUNT_ID,
     CONF_ACTIVITY,
     CONF_EXCLUDED,
@@ -142,6 +143,9 @@ class SporthiveConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(schema, suggested),
             errors=errors,
+            description_placeholders={
+                "example_url": ACTIVITY_URL.format(activity_id="1234567890")
+            },
         )
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
