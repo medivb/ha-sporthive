@@ -7,7 +7,7 @@ import logging
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
@@ -44,7 +44,15 @@ class SporthiveProfileImage(CoordinatorEntity[SporthiveCoordinator], ImageEntity
         CoordinatorEntity.__init__(self, coordinator)
         ImageEntity.__init__(self, hass)
         self._attr_unique_id = f"{coordinator.chip_code.lower()}_profile_picture"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, coordinator.chip_code)})
+        # Full device info: the image platform may be set up before the sensor
+        # platform, and the device name decides the entity ID.
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, coordinator.chip_code)},
+            name=f"Sporthive {coordinator.chip_code}",
+            manufacturer="MYLAPS",
+            model="Transponder",
+            entry_type=DeviceEntryType.SERVICE,
+        )
         self._attr_image_last_updated = dt_util.utcnow()
         self._cached: bytes | None = None
         self._fetched_at: datetime | None = None
