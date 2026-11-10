@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect Sporthive",
-        "description": "Sign in with your MYLAPS (Sporthive) account and paste the link of one of your practice activities, for example https://sporthive.com/practice/1234567890/activity. The integration discovers your other activities from there and imports your history.",
+        "description": "Sign in with your MYLAPS (Sporthive) account and paste the link of one of your practice activities, for example {example_url}. The integration discovers your other activities from there and imports your history.",
         "data": {
           "username": "Email address",
           "password": "Password",

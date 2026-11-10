@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Verbinden met Sporthive",
-        "description": "Log in met je MYLAPS (Sporthive) account en plak een link naar een van je training sessies, bijvoorbeeld https://sporthive.com/practice/1234567890/activity. De integratie vindt van daaruit je andere activiteiten en importeert je geschiedenis.",
+        "description": "Log in met je MYLAPS (Sporthive) account en plak een link naar een van je training sessies, bijvoorbeeld {example_url}. De integratie vindt van daaruit je andere activiteiten en importeert je geschiedenis.",
         "data": {
           "username": "Email adres",
           "password": "Wachtwoord",
