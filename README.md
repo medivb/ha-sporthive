@@ -1,4 +1,4 @@
-# Sporthive for Home Assistant
+# MYLAPS Sporthive Custom Integration for Home Assistant
 
 Imports MYLAPS Sporthive **practice (training)** results into Home Assistant:
 
