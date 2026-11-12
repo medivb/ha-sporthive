@@ -10,13 +10,13 @@ Imports MYLAPS Sporthive **practice (training)** results into Home Assistant:
   - per location (lap times are only comparable on the same track): `sporthive:<chip>_loc<location id>_best_lap`, `_average_lap`, `_median_lap`, `_fastest_speed`, `_laps`, `_distance`, `_active_time`;
   - overall totals across locations: `sporthive:<chip>_laps`, `_distance`, `_active_time`.
 
-> Unofficial. It uses the private API behind sporthive.com (`practice-api.speedhive.com`), which can change without notice. Check the MYLAPS terms of use before relying on it.
+> Unofficial. The author has no professional relation with MYLAPS or Sporthive. It uses the private API behind sporthive.com (`practice-api.speedhive.com`), which can change without notice. Check the MYLAPS terms of use before relying on it.
 
 ## Installation
 
-1. HACS (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-sporthive` as type *Integration*, then install **Sporthive**. Or copy `custom_components/sporthive` into your Home Assistant `config/custom_components/` folder.
+1. HACS (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-sporthive` as type *Integration*, then install **MYLAPS Sporthive Custom Integration**. Or copy `custom_components/sporthive` into your Home Assistant `config/custom_components/` folder.
 2. Restart Home Assistant.
-3. *Settings → Devices & services → Add integration → Sporthive*.
+3. *Settings → Devices & services → Add integration → MYLAPS Sporthive Custom Integration*.
 4. Enter your MYLAPS **email address** and **password**, and the link of any of your activities, e.g. `https://sporthive.com/practice/1234567890/activity`.
 
 ## Languages and icon
@@ -43,7 +43,7 @@ Each activity becomes one hourly statistic row in the hour it started. Distance 
 
 ## Ignoring activities
 
-*Settings → Devices & services → Sporthive → Configure* lists all activities. Tick the ones to ignore (for example a test session); they are left out of the sensors and statistics, and the statistics are rebuilt.
+*Settings → Devices & services → MYLAPS Sporthive Custom Integration → Configure* lists all activities. Tick the ones to ignore (for example a test session); they are left out of the sensors and statistics, and the statistics are rebuilt.
 
 ## Privacy
 
