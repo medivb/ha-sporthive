@@ -14,9 +14,11 @@ Imports MYLAPS Sporthive **practice (training)** results into Home Assistant:
 
 ## Installation
 
-1. HACS (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-sporthive` as type *Integration*, then install **MYLAPS Sporthive Custom Integration**. Or copy `custom_components/sporthive` into your Home Assistant `config/custom_components/` folder.
+1. Add via HACS or Marketplace:  
+[![HACS Install](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=medivb&repository=ha-sporthive&category=integration)
 2. Restart Home Assistant.
-3. *Settings → Devices & services → Add integration → MYLAPS Sporthive Custom Integration*.
+3. Add via Integration Setup:  
+[![Config Flow Start](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=sporthive)
 4. Enter your MYLAPS **email address** and **password**, and the link of any of your activities, e.g. `https://sporthive.com/practice/1234567890/activity`.
 
 ## Languages and icon
